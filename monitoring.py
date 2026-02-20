@@ -5,7 +5,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
+from openpyxl import load_workbook
+from copy import copy
+from datetime import datetime
 import time
+import re
+
+SHEET_NAMES = {'NIA': '게시판(NIA)', 'NIPA': '게시판(NIPA)', 'KISA': '게시판(KISA)', '과기부': '게시판(과기부)'}
 
 # 설정값 (Settings)
 URL = "https://www.nia.or.kr/site/nia_kor/ex/bbs/List.do?cbIdx=78336"
@@ -140,10 +146,17 @@ def extract_detail_info(driver):
         time.sleep(2)  # 페이지 로딩 대기
 
         # 1. 제목 (Title)
-        title = normalize(driver.find_element(By.CLASS_NAME, "tit_area").text)
+        # 1. 원본 제목 가져오기 및 표준화
+        # 1. Get raw title and normalize it
+        raw_title = normalize(driver.find_element(By.CLASS_NAME, "tit_area").text)
+
+        # 2. [] 부분과 그 안의 내용을 제거 (예: [공고] -> "")
+        # 2. Remove the [] part and its content (e.g., [Notice] -> "")
+        # re.sub(패턴, 바꿀문자, 원본)
+        title = re.sub(r'\[.*?\]', '', raw_title).strip()
 
         # 2. 날짜 (Date)
-        reg_date = driver.find_element(By.CSS_SELECTOR, ".write_area .src em").text.strip()
+        reg_date = driver.find_element(By.CSS_SELECTOR, ".write_area .src em").text.strip().replace('.', '-')
 
         # 3. 담당자 및 팀명 (Manager and Team)
         writer_elements = driver.find_elements(By.CSS_SELECTOR, ".write_area .writer em")
@@ -160,9 +173,54 @@ def extract_detail_info(driver):
         print(f"❌ 상세 정보 추출 실패: {e}")
         return None
 
+
+def update_excel_results(file_path, sheet_name, data_list):
+    wb = load_workbook(file_path)
+    ws = wb[sheet_name]
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 1. 실제 데이터가 있는 마지막 행 찾기 (F열 기준)
+    # 1. Find the actual last row with data (based on Column F)
+    actual_last_row = ws.max_row
+    while actual_last_row > 1 and not ws.cell(row=actual_last_row, column=6).value:
+        actual_last_row -= 1
+
+    print(f"📊 현재 실제 데이터 마지막 행: {actual_last_row}")
+
+    for data in reversed(data_list):
+        new_row = actual_last_row + 1
+
+        # 2. 데이터 입력 (Input Data)
+        # A열 수식 복사 (Copy Column A formula)
+        ws.cell(row=new_row, column=1).value = ws.cell(row=actual_last_row, column=1).value
+        ws.cell(row=new_row, column=2).value = today
+        ws.cell(row=new_row, column=3).value = ws.cell(row=actual_last_row, column=3).value
+        ws.cell(row=new_row, column=4).value = data['team']
+        ws.cell(row=new_row, column=5).value = data['manager']
+        ws.cell(row=new_row, column=6).value = data['title']
+        ws.cell(row=new_row, column=8).value = data['reg_date']
+
+        # 3. 서식 복사 (A~R열)
+        for col in range(1, 19):
+            source_cell = ws.cell(row=actual_last_row, column=col)
+            new_cell = ws.cell(row=new_row, column=col)
+            if source_cell.has_style:
+                new_cell.font = copy(source_cell.font)
+                new_cell.border = copy(source_cell.border)
+                new_cell.fill = copy(source_cell.fill)
+                new_cell.number_format = copy(source_cell.number_format)
+                new_cell.alignment = copy(source_cell.alignment)
+
+        actual_last_row += 1  # 다음 항목을 위해 마지막 행 번호 업데이트
+
+    wb.save(file_path)
+    print(f"💾 엑셀 저장 완료: {len(data_list)}건의 데이터가 {new_row}번 행까지 추가되었습니다.")
+
 links = start_monitoring()
 final_data = []
+
 if links:
+
     # 브라우저 실행
     options = webdriver.ChromeOptions()
     # options.add_argument('--headless')  # 화면 없이 실행하고 싶을 때 주석 제거
@@ -172,23 +230,82 @@ if links:
     driver.maximize_window()
     driver.get(URL)
 
-    # 2. 하나의 드라이버 세션에서 순차적으로 작업 (Work sequentially in one driver session)
-    # 여기서는 start_monitoring에서 썼던 driver를 그대로 사용해야 합니다.
-    # The driver used in start_monitoring should be reused here.
+    # 1. 브라우저가 이미 열려있지 않다면 새로 실행 (Start browser if not already running)
+    # options 설정은 기존과 동일하게 유지합니다.
+    # Keep the options settings the same as before.
+
+    # 현재 목록 페이지의 고유 ID(핸들)를 저장합니다.
+    # Save the unique ID (handle) of the current list page.
+    main_window = driver.current_window_handle
+    final_data = []
+
+    print(f"🔎 총 {len(links)}개의 신규 공고를 새 탭으로 열어 분석합니다.")
+
     for i, item in enumerate(links, 1):
-        print(f"🚀 [{i}/{len(links)}] 상세 페이지 분석 중: {item['title'][:20]}...")
+        print(f"🚀 [{i}/{len(links)}] 상세 페이지 여는 중: {item['title'][:20]}...")
 
-        # 상세페이지 진입
-        driver.execute_script(item['onclick'])
+        try:
+            # 2. 새 탭 열기 및 제어권 이동 (Open new tab and switch focus)
+            driver.execute_script("window.open('');")
+            driver.switch_to.window(driver.window_handles[-1])
 
-        # 정보 추출
-        details = extract_detail_info(driver)
-        if details:
-            final_data.append(details)
-            print(f"   ✅ 완료: {details['title']} {details['reg_date']} {details['manager']} ({details['team']})")
+            # 3. 새 탭에서 목록 페이지 접속 후 상세페이지 실행
+            # 3. Access list page in new tab and execute detail page script
+            driver.get(URL)
+            time.sleep(2)  # 안정적인 로딩 대기
+            driver.execute_script(item['onclick'])
 
-        # 다시 목록으로 돌아가기 (Go back to the list)
-        driver.back()
-        time.sleep(2)
+            # 4. 정보 추출 (Extract information)
+            details = extract_detail_info(driver)
+            if details:
+                final_data.append(details)
+                print(f"   ✅ 완료: {details['title']} {details['reg_date']} {details['manager']} ({details['team']})")
 
-    print(f"\n✨ 총 {len(final_data)}건의 상세 정보 수집이 완료되었습니다.")
+            # 5. [중요] 상세 페이지 탭은 그대로 두고, 다시 목록 탭(메인)으로 돌아오기
+            # 5. [Important] Leave the detail tab open and return to the list tab (main).
+            driver.switch_to.window(main_window)
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"   ❌ '{item['title']}' 처리 중 오류: {e}")
+            driver.switch_to.window(main_window)  # 오류 발생 시 메인으로 복귀
+
+    # 엑셀 기입
+    update_excel_results(EXCEL_FILE, SHEET_NAME, final_data)
+
+    print(f"\n✨ 총 {len(final_data)}건의 기초 정보 수집이 완료되었습니다.")
+    print("📢 상세 페이지들이 탭으로 모두 열려 있으니 수동 작업을 진행하세요.")
+
+
+
+
+# if links:
+#     # 브라우저 실행
+#     options = webdriver.ChromeOptions()
+#     # options.add_argument('--headless')  # 화면 없이 실행하고 싶을 때 주석 제거
+#     options.add_experimental_option("detach", True)  # 실행 완료 후 브라우저 종료 방지
+#
+#     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+#     driver.maximize_window()
+#     driver.get(URL)
+#
+#     # 2. 하나의 드라이버 세션에서 순차적으로 작업 (Work sequentially in one driver session)
+#     # 여기서는 start_monitoring에서 썼던 driver를 그대로 사용해야 합니다.
+#     # The driver used in start_monitoring should be reused here.
+#     for i, item in enumerate(links, 1):
+#         print(f"🚀 [{i}/{len(links)}] 상세 페이지 분석 중: {item['title'][:20]}...")
+#
+#         # 상세페이지 진입
+#         driver.execute_script(item['onclick'])
+#
+#         # 정보 추출
+#         details = extract_detail_info(driver)
+#         if details:
+#             final_data.append(details)
+#             print(f"   ✅ 완료: {details['title']} {details['reg_date']} {details['manager']} ({details['team']})")
+#
+#         # 다시 목록으로 돌아가기 (Go back to the list)
+#         driver.back()
+#         time.sleep(2)
+#
+#     print(f"\n✨ 총 {len(final_data)}건의 상세 정보 수집이 완료되었습니다.")
