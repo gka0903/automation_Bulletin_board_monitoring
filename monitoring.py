@@ -8,6 +8,7 @@ from selenium.webdriver.common.by import By
 from openpyxl import load_workbook
 from copy import copy
 from datetime import datetime
+import os
 import time
 import re
 
@@ -177,7 +178,7 @@ def extract_detail_info(driver):
 def update_excel_results(file_path, sheet_name, data_list):
     wb = load_workbook(file_path)
     ws = wb[sheet_name]
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().date()
 
     # 1. 실제 데이터가 있는 마지막 행 찾기 (F열 기준)
     # 1. Find the actual last row with data (based on Column F)
@@ -194,6 +195,7 @@ def update_excel_results(file_path, sheet_name, data_list):
         # A열 수식 복사 (Copy Column A formula)
         ws.cell(row=new_row, column=1).value = ws.cell(row=actual_last_row, column=1).value
         ws.cell(row=new_row, column=2).value = today
+        ws.cell(row=new_row, column=2).number_format = 'yyyy-mm-dd'
         ws.cell(row=new_row, column=3).value = ws.cell(row=actual_last_row, column=3).value
         ws.cell(row=new_row, column=4).value = data['team']
         ws.cell(row=new_row, column=5).value = data['manager']
@@ -277,35 +279,5 @@ if links:
     print("📢 상세 페이지들이 탭으로 모두 열려 있으니 수동 작업을 진행하세요.")
 
 
-
-
-# if links:
-#     # 브라우저 실행
-#     options = webdriver.ChromeOptions()
-#     # options.add_argument('--headless')  # 화면 없이 실행하고 싶을 때 주석 제거
-#     options.add_experimental_option("detach", True)  # 실행 완료 후 브라우저 종료 방지
-#
-#     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-#     driver.maximize_window()
-#     driver.get(URL)
-#
-#     # 2. 하나의 드라이버 세션에서 순차적으로 작업 (Work sequentially in one driver session)
-#     # 여기서는 start_monitoring에서 썼던 driver를 그대로 사용해야 합니다.
-#     # The driver used in start_monitoring should be reused here.
-#     for i, item in enumerate(links, 1):
-#         print(f"🚀 [{i}/{len(links)}] 상세 페이지 분석 중: {item['title'][:20]}...")
-#
-#         # 상세페이지 진입
-#         driver.execute_script(item['onclick'])
-#
-#         # 정보 추출
-#         details = extract_detail_info(driver)
-#         if details:
-#             final_data.append(details)
-#             print(f"   ✅ 완료: {details['title']} {details['reg_date']} {details['manager']} ({details['team']})")
-#
-#         # 다시 목록으로 돌아가기 (Go back to the list)
-#         driver.back()
-#         time.sleep(2)
-#
-#     print(f"\n✨ 총 {len(final_data)}건의 상세 정보 수집이 완료되었습니다.")
+# 모든 로직이 끝난 후 파일 열기 (Open the file after all logic is finished)
+os.startfile(EXCEL_FILE)
