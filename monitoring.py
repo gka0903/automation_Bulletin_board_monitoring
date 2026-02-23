@@ -10,97 +10,199 @@ import os
 import time
 import re
 
-# 설정값
-URL = "https://www.nia.or.kr/site/nia_kor/ex/bbs/List.do?cbIdx=78336"
+# 엑셀 파일 경로
+# Excel file path
 EXCEL_FILE = r'C:\Users\default.DESKTOP-JNPQLP7\Desktop\업무\게시판 모니터링 인수인계\최신화 ★2026_주요기관 게시판 및 디전_사전협의 모니터링_최신( 함형범 전임 ).xlsx'
-SHEET_NAME = '게시판(NIA)'
+
+# 통합 설정 딕셔너리
+# Integrated configuration dictionary
+AGENCY_CONFIG = {
+    # "NIA": {
+    #     "menu_path": ["알림마당", "입찰공고"],
+    #     "url": "https://www.nia.or.kr/site/nia_kor/ex/bbs/List.do?cbIdx=78336",
+    #     "sheet_name": "게시판(NIA)",
+    #     "is_spa": False,
+    #     "link_type": "onclick", # 스크립트 실행은 'onclick', 일반 주소는 'href' /
+    #     "selectors": {
+    #         "list_item": ".board_type01 ul li",
+    #         "title": ".subject",
+    #         "link_tag": "a",
+    #         "active_page": ".pageNation a.active",
+    #         "next_page": ".pageNation .next a",
+    #         "detail_title": ".tit_area",
+    #         "detail_date": ".write_area .src em",
+    #         "detail_writer": ".write_area .writer em"
+    #     },
+    # },
+    # "KISA": {
+    #     "menu_path": ["알림마당", "입찰공고"],
+    #     "url": "https://www.kisa.or.kr/403",
+    #     "sheet_name": "게시판(KISA)",
+    #     "is_spa": False,
+    #     "link_type": "href",
+    #     "selectors": {
+    #         "list_item": ".tbl_board tbody tr",
+    #         "title": ".sbj",
+    #         "link_tag": ".sbj a",
+    #         "active_page": ".pagination a.on",
+    #         "next_page": ".pagination a.next",
+    #         "detail_title": ".board_detail_info h2",
+    #         "detail_date": "//dt[contains(text(), '등록일')]/following-sibling::dd", # XPath 사용 / Use XPath
+    #         "detail_team": "//dt[contains(text(), '담당부서')]/following-sibling::dd", # 분리된 부서 정보 / Separated team info
+    #         "detail_manager": "" # 이름이 없으므로 비워둠 / Leave empty as there is no name
+    #     }
+    # },
+    "과기부": {
+        "menu_path": ["알림마당", "사업공고"],
+        "url": "https://www.msit.go.kr/bbs/list.do?sCode=user&mPid=121&mId=311",
+        "sheet_name": "게시판(과기부)",
+        "is_spa": False,
+        "link_type": "onclick",
+        "selectors": {
+            # thead 클래스를 가진 항목은 제외하고 실제 게시글 줄만 선택합니다.
+            "list_item": ".board_list .toggle:not(.thead)",
+            "title": ".txt .title",
+            "link_tag": "a",
+            "active_page": ".page-links a[aria-current='page']",
+            "next_page": "a.page-navi.next",
+            "detail_title": ".view_head h2",
+            "detail_date": "//dt[contains(text(), '작성일')]/following-sibling::dd",
+            "detail_team": "//dt[contains(text(), '부서')]/following-sibling::dd",
+            "detail_manager": "//dt[contains(text(), '담당자')]/following-sibling::dd"
+        }
+    }
+}
 
 
-def read_excel_data(file_path, sheet_name='게시판(NIA)'):
-    """엑셀에서 마지막에 수집된 사업명을 가져옵니다."""
+def read_excel_data(file_path, sheet_name):
+    # 엑셀에서 마지막에 수집된 사업명을 가져옵니다.
     try:
         df = pd.read_excel(file_path, sheet_name=sheet_name)
         return df['사업명'].iloc[-1]
     except Exception as e:
-        print(f"❌ 엑셀 읽기 오류: {e}")
+        print(f"❌ 엑셀 읽기 오류 (Excel read error): {e}")
         return None
 
 
-def start_monitoring(driver, target_name):
-    """게시판을 탐색하며 새로운 공고의 스크립트를 수집합니다."""
-    driver.get(URL)
+def start_monitoring(driver, target_name, config):
+    # 설정값을 바탕으로 게시판을 탐색합니다.
+    driver.get(config["url"])
     new_post_links = []
+    sel = config["selectors"]
 
     while True:
-        time.sleep(3)  # 페이지 로드 대기
+        time.sleep(3)
 
         try:
-            li_elements = driver.find_elements(By.CSS_SELECTOR, ".board_type01 ul li")
+            li_elements = driver.find_elements(By.CSS_SELECTOR, sel["list_item"])
             stop_searching = False
 
             for li in li_elements:
                 try:
-                    title_text = li.find_element(By.CSS_SELECTOR, ".subject").text.strip()
+                    title_text = li.find_element(By.CSS_SELECTOR, sel["title"]).text.strip()
 
                     if target_name in title_text:
-                        print(f"🏁 기준점 발견 [{title_text}]. 탐색 중단.")
+                        print(f"🏁 기준점 발견 (Found reference point) [{title_text}]. 탐색 중단 (Stopping search).")
                         stop_searching = True
                         break
 
-                    a_tag = li.find_element(By.TAG_NAME, "a")
-                    onclick_val = a_tag.get_attribute("onclick")
+                    a_tag = li.find_element(By.CSS_SELECTOR, sel["link_tag"])
+                    link_val = a_tag.get_attribute(config["link_type"])
 
-                    # 중복 수집 방지 및 리스트 추가
                     if not any(item['title'] == title_text for item in new_post_links):
-                        print(f"🆕 새 공고 수집: {title_text}")
+                        print(f"🆕 새 공고 수집 (Collected new post): {title_text}")
                         new_post_links.append({
                             'title': title_text,
-                            'onclick': onclick_val
+                            'link_val': link_val
                         })
                 except:
-                    continue  # 공지사항 등 구조가 다른 요소 건너뛰기
+                    continue
 
             if stop_searching:
                 break
 
             # 다음 페이지 이동
-            print("👉 현재 페이지에 없음. 다음 페이지로 이동...")
-            current_page_num = int(driver.find_element(By.CSS_SELECTOR, ".pageNation a.active").text)
+            print("👉 현재 페이지에 없음. 다음 페이지로 이동... (Not on current page. Moving to next page...)")
+            current_page_num = int(driver.find_element(By.CSS_SELECTOR, sel["active_page"]).text)
             next_page_num = current_page_num + 1
 
             try:
                 driver.find_element(By.LINK_TEXT, str(next_page_num)).click()
             except:
-                driver.find_element(By.CSS_SELECTOR, ".pageNation .next a").click()
+                driver.find_element(By.CSS_SELECTOR, sel["next_page"]).click()
 
         except Exception as e:
-            print(f"⚠️ 검색 중 오류 발생: {e}")
+            print(f"⚠️ 검색 중 오류 발생 (Error during search): {e}")
             break
 
     return new_post_links
 
 
-def extract_detail_info(driver):
-    """상세 페이지에서 필요한 정보를 추출합니다."""
+def extract_detail_info(driver, config):
+    sel = config["selectors"]
     try:
         time.sleep(2)
-        raw_title = " ".join(driver.find_element(By.CLASS_NAME, "tit_area").text.split()).strip()
+
+        # 선택자가 XPath인지 CSS 선택자인지 자동 판별하여 요소를 찾는 헬퍼 함수
+        def get_elem(selector_str):
+            if not selector_str: return None
+            by_type = By.XPATH if selector_str.startswith("//") else By.CSS_SELECTOR
+            try:
+                return driver.find_element(by_type, selector_str)
+            except:
+                return None
+
+        def get_elems(selector_str):
+            if not selector_str: return []
+            by_type = By.XPATH if selector_str.startswith("//") else By.CSS_SELECTOR
+            try:
+                return driver.find_elements(by_type, selector_str)
+            except:
+                return []
+
+        # 1) 제목 및 등록일 추출
+        title_elem = get_elem(sel["detail_title"])
+        raw_title = " ".join(title_elem.text.split()).strip() if title_elem else ""
         title = re.sub(r'\[.*?\]', '', raw_title).strip()
 
-        reg_date = driver.find_element(By.CSS_SELECTOR, ".write_area .src em").text.strip().replace('.', '-')
+        date_elem = get_elem(sel["detail_date"])
+        if date_elem:
+            raw_date_text = date_elem.text.strip()
+            try:
+                # pd.to_datetime을 사용하면 "2026. 2. 20" 또는 "Feb 23, 2026" 모두 자동으로 파싱합니다.
+                parsed_date = pd.to_datetime(raw_date_text)
+                reg_date = parsed_date.strftime("%Y-%m-%d")  # "YYYY-MM-DD" 형태로 통일
+            except Exception:
+                # 자동 변환 실패 시 기본 텍스트 공백 제거 처리
+                reg_date = raw_date_text.replace(" ", "").replace(".", "-")
+        else:
+            reg_date = ""
 
-        writer_elements = driver.find_elements(By.CSS_SELECTOR, ".write_area .writer em")
-        manager = writer_elements[0].text.strip() if len(writer_elements) > 0 else "N/A"
-        team = writer_elements[1].text.strip() if len(writer_elements) > 1 else "N/A"
+        # 2) 담당자 및 부서 추출 분기 처리
+        if "detail_writer" in sel:
+
+            # NIA 방식: 하나의 선택자로 가져와 인덱스로 분리
+            writer_elements = get_elems(sel["detail_writer"])
+            manager = writer_elements[0].text.strip() if len(writer_elements) > 0 else ""
+            team = writer_elements[1].text.strip() if len(writer_elements) > 1 else ""
+        else:
+
+            # KISA 방식: 부서와 담당자가 별도의 선택자로 지정된 경우
+            team_elem = get_elem(sel.get("detail_team", ""))
+            team = team_elem.text.strip() if team_elem else ""
+
+            manager_elem = get_elem(sel.get("detail_manager", ""))
+            manager = manager_elem.text.strip() if manager_elem else ""
 
         return {"title": title, "reg_date": reg_date, "manager": manager, "team": team}
+
     except Exception as e:
-        print(f"❌ 상세 정보 추출 실패: {e}")
+        print(f"❌ 상세 정보 추출 실패 (Failed to extract detail info): {e}")
         return None
 
 
 def update_excel_results(file_path, sheet_name, data_list):
-    """수집된 데이터를 엑셀에 업데이트하고 서식을 복사합니다."""
+    # 엑셀 업데이트 및 서식 복사 로직입니다.
     if not data_list:
         return
 
@@ -112,7 +214,7 @@ def update_excel_results(file_path, sheet_name, data_list):
     while actual_last_row > 1 and not ws.cell(row=actual_last_row, column=6).value:
         actual_last_row -= 1
 
-    print(f"📊 현재 실제 데이터 마지막 행: {actual_last_row}")
+    print(f"📊 현재 실제 데이터 마지막 행 (Current actual last row): {actual_last_row}")
 
     for data in reversed(data_list):
         new_row = actual_last_row + 1
@@ -124,7 +226,17 @@ def update_excel_results(file_path, sheet_name, data_list):
         ws.cell(row=new_row, column=4).value = data['team']
         ws.cell(row=new_row, column=5).value = data['manager']
         ws.cell(row=new_row, column=6).value = data['title']
-        ws.cell(row=new_row, column=8).value = data['reg_date']
+        # 공고 등록일 (Column 8) - 문자열을 날짜 객체로 변환
+        try:
+            # pd.to_datetime을 사용하여 문자열을 날짜 객체로 변환 후 date()만 추출
+            reg_date_obj = pd.to_datetime(data['reg_date']).date()
+            ws.cell(row=new_row, column=8).value = reg_date_obj
+        except:
+            # 변환 실패 시 기존 텍스트 그대로 입력
+            ws.cell(row=new_row, column=8).value = data['reg_date']
+
+        # 날짜 서식 적용 (Formatting)
+        ws.cell(row=new_row, column=8).number_format = 'yyyy-mm-dd'
 
         for col in range(1, 19):
             source_cell = ws.cell(row=actual_last_row, column=col)
@@ -139,58 +251,70 @@ def update_excel_results(file_path, sheet_name, data_list):
         actual_last_row += 1
 
     wb.save(file_path)
-    print(f"💾 엑셀 저장 완료: {len(data_list)}건 추가됨.")
+    print(f"💾 엑셀 저장 완료 (Excel save completed): {len(data_list)}건 추가됨. ({len(data_list)} items added.)")
 
 
 def main():
-    target_name = read_excel_data(EXCEL_FILE, SHEET_NAME)
-    if not target_name:
-        return
-
-    print(f"🎯 찾고 있는 사업명: {target_name}")
-
-    # 1개의 브라우저만 실행하여 재사용
     options = webdriver.ChromeOptions()
     options.add_experimental_option("detach", True)
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     driver.maximize_window()
 
-    links = start_monitoring(driver, target_name)
-    final_data = []
+    # 설정된 모든 기관을 순회하며 모니터링을 진행합니다.
+    for agency_name, config in AGENCY_CONFIG.items():
+        print(f"\n========================================")
+        print(f"🏢 [{agency_name}] 모니터링 시작 (Starting monitoring)")
+        print(f"========================================")
 
-    if links:
-        main_window = driver.current_window_handle
-        print(f"🔎 총 {len(links)}개의 신규 공고를 새 탭으로 열어 분석합니다.")
+        target_name = read_excel_data(EXCEL_FILE, config["sheet_name"])
+        if not target_name:
+            print(f"⚠️ {agency_name}의 기준점을 찾을 수 없습니다. (Could not find reference point for {agency_name}.)")
+            continue
 
-        for i, item in enumerate(links, 1):
-            print(f"🚀 [{i}/{len(links)}] 상세 페이지 여는 중: {item['title'][:20]}...")
-            try:
-                driver.execute_script("window.open('');")
-                driver.switch_to.window(driver.window_handles[-1])
-                driver.get(URL)
-                time.sleep(2)
+        print(f"🎯 찾고 있는 사업명 (Target project name): {target_name}")
 
-                driver.execute_script(item['onclick'])
-                details = extract_detail_info(driver)
+        links = start_monitoring(driver, target_name, config)
+        final_data = []
 
-                if details:
-                    final_data.append(details)
-                    print(f"   ✅ 완료: {details['title']}")
+        if links:
+            main_window = driver.current_window_handle
+            print(f"🔎 총 {len(links)}개의 신규 공고를 새 탭으로 열어 분석합니다. (Analyzing a total of {len(links)} new posts in new tabs.)")
 
-                driver.switch_to.window(main_window)
-                time.sleep(1)
-            except Exception as e:
-                print(f"   ❌ 오류 발생: {e}")
-                driver.switch_to.window(main_window)
+            for i, item in enumerate(links, 1):
+                print(f"🚀 [{i}/{len(links)}] 상세 페이지 여는 중 (Opening detail page): {item['title'][:20]}...")
+                try:
+                    driver.execute_script("window.open('');")
+                    driver.switch_to.window(driver.window_handles[-1])
+                    driver.get(config["url"])
+                    time.sleep(2)
 
-        update_excel_results(EXCEL_FILE, SHEET_NAME, final_data)
-        print(f"\n✨ 총 {len(final_data)}건 수집 완료.")
-        print("📢 상세 페이지 탭이 유지되어 있습니다. 수동 작업을 진행하세요.")
+                    # 링크 타입에 따라 페이지 이동 방식을 다르게 처리합니다.
+                    # Handles page navigation differently depending on the link type.
+                    if config["link_type"] == "onclick":
+                        driver.execute_script(item['link_val'])
+                    else:
+                        driver.get(item['link_val'])
 
-    else:
-        print("🤷‍♂️ 새로운 공고가 없습니다.")
-        driver.quit()  # 새 공고가 없으면 브라우저 종료
+                    details = extract_detail_info(driver, config)
 
+                    if details:
+                        final_data.append(details)
+                        print(f"   ✅ 완료 (Completed): {details['title']}")
+
+                    driver.switch_to.window(main_window)
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"   ❌ 오류 발생 (Error occurred): {e}")
+                    driver.switch_to.window(main_window)
+
+            update_excel_results(EXCEL_FILE, config["sheet_name"], final_data)
+            print(f"\n✨ [{agency_name}] 총 {len(final_data)}건 수집 완료. (Collected a total of {len(final_data)} items.)")
+
+        else:
+            print(f"🤷‍♂️ [{agency_name}] 새로운 공고가 없습니다. (No new posts.)")
+
+    print("📢 모든 기관의 모니터링이 종료되었습니다. (Monitoring for all agencies has ended.)")
+    driver.quit()
     os.startfile(EXCEL_FILE)
 
 
