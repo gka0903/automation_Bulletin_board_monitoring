@@ -1,0 +1,7 @@
+# 터미널에 입력해 라이브러리 설치
+# pip install -r requirements.txt
+
+pandas
+selenium
+webdriver-manager
+openpyxl
